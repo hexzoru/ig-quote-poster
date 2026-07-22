@@ -26,9 +26,11 @@ async function main() {
       isClosing,
       seed: Date.now() + i,
     });
-    images.push({ buffer, filename: `slide-${i + 1}.png` });
+images.push({ buffer, filename: `slide-${i + 1}.png` });
+    if (i < content.slides.length - 1) {
+      await new Promise((r) => setTimeout(r, 6000)); // stay under Pollinations' anonymous rate limit
+    }
   }
-
   console.log("Step 3/4: Uploading images to GitHub for public URLs...");
   const imageUrls = await uploadImagesToGithub(images);
   console.log(imageUrls.join("\n"));
