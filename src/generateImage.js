@@ -3,15 +3,14 @@ import sharp from "sharp";
 const WIDTH = 1080;
 const HEIGHT = 1350; // Instagram 4:5 portrait, works well for feed + carousel
 
-// Free: https://pollinations.ai — optional free API key from https://enter.pollinations.ai
-// improves reliability/priority but is not required.
+// Free, no signup required: https://image.pollinations.ai/prompt/{prompt}
+// (the newer gen.pollinations.ai endpoint requires an account/bearer token, so we
+// deliberately use this simpler legacy endpoint which stays free/anonymous.)
 function pollinationsUrl(prompt, seed) {
   const encoded = encodeURIComponent(
     `${prompt}, minimal, aesthetic, soft lighting, no text, no watermark, no people`
   );
-  const key = process.env.POLLINATIONS_API_KEY;
-  const keyParam = key ? `&key=${encodeURIComponent(key)}` : "";
-  return `https://gen.pollinations.ai/image/${encoded}?width=${WIDTH}&height=${HEIGHT}&nologo=true&seed=${seed}${keyParam}`;
+  return `https://image.pollinations.ai/prompt/${encoded}?width=${WIDTH}&height=${HEIGHT}&seed=${seed}&model=flux`;
 }
 
 function escapeXml(str) {
