@@ -20,11 +20,10 @@ async function main() {
     const slide = content.slides[i];
     const isClosing = i === content.slides.length - 1;
     console.log(`  - slide ${i + 1}/${content.slides.length}: "${slide.text}"`);
-    const buffer = await generateSlideImage({
+const buffer = await generateSlideImage({
       text: slide.text,
       imagePrompt: slide.imagePrompt,
       isClosing,
-      seed: Date.now() + i,
     });
 images.push({ buffer, filename: `slide-${i + 1}.png` });
     if (i < content.slides.length - 1) {
