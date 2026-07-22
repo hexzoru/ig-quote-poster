@@ -1,0 +1,38 @@
+name: Daily Instagram Quote Post
+
+on:
+  schedule:
+    # Runs at 03:30 UTC = 09:00 IST every day. Adjust to your preferred posting time.
+    - cron: "30 3 * * *"
+  workflow_dispatch: {} # lets you trigger it manually from the Actions tab to test
+
+permissions:
+  contents: write # needed so the workflow can commit generated images back to the repo
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run daily posting pipeline
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL: ${{ secrets.GROQ_MODEL }}
+          IG_USER_ID: ${{ secrets.IG_USER_ID }}
+          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+          IG_HANDLE: ${{ secrets.IG_HANDLE }}
+          GH_OWNER: ${{ github.repository_owner }}
+          GH_REPO: ${{ github.event.repository.name }}
+          GH_BRANCH: main
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm start
