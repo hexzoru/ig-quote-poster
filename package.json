@@ -1,0 +1,18 @@
+{
+  "name": "ig-quote-poster",
+  "version": "1.0.0",
+  "description": "Daily AI-generated quote carousel poster for Instagram",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test:content": "node -e \"import('./src/generateContent.js').then(m=>m.generateContent().then(r=>console.log(JSON.stringify(r,null,2))))\""
+  },
+  "dependencies": {
+    "sharp": "^0.33.5",
+    "@octokit/rest": "^21.0.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
