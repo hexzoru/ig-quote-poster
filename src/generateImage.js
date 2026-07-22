@@ -6,11 +6,11 @@ const HEIGHT = 1350; // Instagram 4:5 portrait, works well for feed + carousel
 // Free, no signup required: https://image.pollinations.ai/prompt/{prompt}
 // (the newer gen.pollinations.ai endpoint requires an account/bearer token, so we
 // deliberately use this simpler legacy endpoint which stays free/anonymous.)
-function pollinationsUrl(prompt, seed) {
+function pollinationsUrl(prompt, seed, model) {
   const encoded = encodeURIComponent(
     `${prompt}, minimal, aesthetic, soft lighting, no text, no watermark, no people`
   );
-  return `https://image.pollinations.ai/prompt/${encoded}?width=${WIDTH}&height=${HEIGHT}&seed=${seed}&model=flux`;
+  return `https://image.pollinations.ai/prompt/${encoded}?width=${WIDTH}&height=${HEIGHT}&seed=${seed}&model=${model}`;
 }
 
 function escapeXml(str) {
@@ -70,23 +70,25 @@ function buildTextOverlaySvg({ text, fontSize = 62, isClosing = false }) {
   </svg>`;
 }
 
-// Downloads the Pollinations image with exponential backoff.
-// Pollinations is a free shared service and its image models throw intermittent
-// 500s under load - this is a known, documented issue on their end, not a bug in
-// this code. A new seed is used on each retry since a fresh generation sometimes
-// succeeds where a retried identical one fails.
+// Downloads the Pollinations image with exponential backoff, rotating models on retry.
+// Pollinations' "flux" model in particular has had a documented, ongoing 500-error
+// outage - this is a known issue on their end, not a bug in this code. Rotating to
+// "turbo" (and back) on retries usually gets past it.
+const MODEL_ROTATION = ["flux", "turbo", "flux", "turbo", "turbo"];
+
 async function fetchBackground(prompt, seed) {
   let lastErr;
-  const maxAttempts = 5;
+  const maxAttempts = MODEL_ROTATION.length;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const attemptSeed = seed + attempt; // vary seed per retry
-    const url = pollinationsUrl(prompt, attemptSeed);
+    const model = MODEL_ROTATION[attempt - 1];
+    const url = pollinationsUrl(prompt, attemptSeed, model);
     try {
       const res = await fetch(url, { signal: AbortSignal.timeout(90000) });
-      if (!res.ok) throw new Error(`Pollinations HTTP ${res.status}`);
+      if (!res.ok) throw new Error(`Pollinations HTTP ${res.status} (model=${model})`);
       const arrayBuf = await res.arrayBuffer();
       const buf = Buffer.from(arrayBuf);
-      if (buf.length < 1000) throw new Error("Pollinations returned an empty/invalid image");
+      if (buf.length < 1000) throw new Error(`Pollinations returned an empty/invalid image (model=${model})`);
       return buf;
     } catch (e) {
       lastErr = e;
