@@ -3,66 +3,53 @@ import sharp from "sharp";
 const WIDTH = 1080;
 const HEIGHT = 1350; // Instagram 4:5 portrait, works well for feed + carousel
 
-// Free (with a free Hugging Face account + token): https://huggingface.co/docs/api-inference
-// Pollinations.ai was tried first but has had a long, ongoing history of widespread
-// 500 errors across all its models (documented extensively in their own GitHub issue
-// tracker from Dec 2025 through mid-2026) - it isn't reliable enough for a daily job.
-// Hugging Face's hosted inference for open image models is free and far more stable.
-const HF_MODELS = [
-  "black-forest-labs/FLUX.1-schnell",
-  "stabilityai/stable-diffusion-xl-base-1.0",
-];
+// Free, no credit card: Google's Gemini API image generation (Gemini 2.5 Flash Image,
+// aka "Nano Banana"). Get a free key at https://aistudio.google.com/apikey
+// This is Google-run infrastructure (not a small community project), which is why
+// it's used here instead of Pollinations (chronically unreliable per their own
+// GitHub issue tracker) or Hugging Face's shifting Inference Providers routing.
+const GEMINI_MODEL = "gemini-2.5-flash-image";
 
 function buildPrompt(prompt) {
-  return `${prompt}, minimal, aesthetic, soft lighting, no text, no watermark, no people`;
-}
-
-async function fetchFromHuggingFace(prompt, model, token) {
-  const res = await fetch(
-    `https://api-inference.huggingface.co/models/${model}`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ inputs: buildPrompt(prompt) }),
-      signal: AbortSignal.timeout(90000),
-    }
-  );
-
-  if (res.status === 503) {
-    const body = await res.json().catch(() => ({}));
-    const waitSec = Math.min(body.estimated_time ?? 20, 30);
-    throw new Error(`HF model ${model} is loading, retry after ~${waitSec}s`);
-  }
-  if (!res.ok) {
-    const bodyText = await res.text().catch(() => "");
-    throw new Error(`HF API HTTP ${res.status} (model=${model}): ${bodyText.slice(0, 200)}`);
-  }
-
-  const arrayBuf = await res.arrayBuffer();
-  const buf = Buffer.from(arrayBuf);
-  if (buf.length < 1000) throw new Error(`HF API returned an empty/invalid image (model=${model})`);
-  return buf;
+  return `Generate an image: ${prompt}, minimal, aesthetic, soft lighting, no text, no watermark, no people`;
 }
 
 async function fetchBackground(prompt) {
-  const token = process.env.HF_API_TOKEN;
-  if (!token) throw new Error("Missing HF_API_TOKEN env var (get a free one at https://huggingface.co/settings/tokens)");
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("Missing GEMINI_API_KEY env var (get a free one at https://aistudio.google.com/apikey)");
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
 
   let lastErr;
-  for (let attempt = 1; attempt <= HF_MODELS.length; attempt++) {
-    const model = HF_MODELS[attempt - 1];
+  for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      return await fetchFromHuggingFace(prompt, model, token);
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: buildPrompt(prompt) }] }],
+        }),
+        signal: AbortSignal.timeout(60000),
+      });
+
+      if (!res.ok) {
+        const bodyText = await res.text().catch(() => "");
+        throw new Error(`Gemini API HTTP ${res.status}: ${bodyText.slice(0, 300)}`);
+      }
+
+      const data = await res.json();
+      const parts = data.candidates?.[0]?.content?.parts || [];
+      const imagePart = parts.find((p) => p.inlineData?.data);
+      if (!imagePart) throw new Error("Gemini response contained no image data");
+
+      return Buffer.from(imagePart.inlineData.data, "base64");
     } catch (e) {
       lastErr = e;
-      console.log(`  HF attempt ${attempt}/${HF_MODELS.length} failed (${e.message})`);
-      if (attempt < HF_MODELS.length) await new Promise((r) => setTimeout(r, 5000));
+      console.log(`  Gemini attempt ${attempt}/3 failed (${e.message})`);
+      if (attempt < 3) await new Promise((r) => setTimeout(r, 4000 * attempt));
     }
   }
-  throw new Error(`Failed to fetch image from Hugging Face after ${HF_MODELS.length} attempts: ${lastErr}`);
+  throw new Error(`Failed to fetch image from Gemini after 3 attempts: ${lastErr}`);
 }
 
 function escapeXml(str) {
