@@ -3,14 +3,66 @@ import sharp from "sharp";
 const WIDTH = 1080;
 const HEIGHT = 1350; // Instagram 4:5 portrait, works well for feed + carousel
 
-// Free, no signup required: https://image.pollinations.ai/prompt/{prompt}
-// (the newer gen.pollinations.ai endpoint requires an account/bearer token, so we
-// deliberately use this simpler legacy endpoint which stays free/anonymous.)
-function pollinationsUrl(prompt, seed, model) {
-  const encoded = encodeURIComponent(
-    `${prompt}, minimal, aesthetic, soft lighting, no text, no watermark, no people`
+// Free (with a free Hugging Face account + token): https://huggingface.co/docs/api-inference
+// Pollinations.ai was tried first but has had a long, ongoing history of widespread
+// 500 errors across all its models (documented extensively in their own GitHub issue
+// tracker from Dec 2025 through mid-2026) - it isn't reliable enough for a daily job.
+// Hugging Face's hosted inference for open image models is free and far more stable.
+const HF_MODELS = [
+  "black-forest-labs/FLUX.1-schnell",
+  "stabilityai/stable-diffusion-xl-base-1.0",
+];
+
+function buildPrompt(prompt) {
+  return `${prompt}, minimal, aesthetic, soft lighting, no text, no watermark, no people`;
+}
+
+async function fetchFromHuggingFace(prompt, model, token) {
+  const res = await fetch(
+    `https://api-inference.huggingface.co/models/${model}`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ inputs: buildPrompt(prompt) }),
+      signal: AbortSignal.timeout(90000),
+    }
   );
-  return `https://image.pollinations.ai/prompt/${encoded}?width=${WIDTH}&height=${HEIGHT}&seed=${seed}&model=${model}`;
+
+  if (res.status === 503) {
+    const body = await res.json().catch(() => ({}));
+    const waitSec = Math.min(body.estimated_time ?? 20, 30);
+    throw new Error(`HF model ${model} is loading, retry after ~${waitSec}s`);
+  }
+  if (!res.ok) {
+    const bodyText = await res.text().catch(() => "");
+    throw new Error(`HF API HTTP ${res.status} (model=${model}): ${bodyText.slice(0, 200)}`);
+  }
+
+  const arrayBuf = await res.arrayBuffer();
+  const buf = Buffer.from(arrayBuf);
+  if (buf.length < 1000) throw new Error(`HF API returned an empty/invalid image (model=${model})`);
+  return buf;
+}
+
+async function fetchBackground(prompt) {
+  const token = process.env.HF_API_TOKEN;
+  if (!token) throw new Error("Missing HF_API_TOKEN env var (get a free one at https://huggingface.co/settings/tokens)");
+
+  let lastErr;
+  for (let attempt = 1; attempt <= HF_MODELS.length; attempt++) {
+    const model = HF_MODELS[attempt - 1];
+    try {
+      return await fetchFromHuggingFace(prompt, model, token);
+    } catch (e) {
+      lastErr = e;
+      console.log(`  HF attempt ${attempt}/${HF_MODELS.length} failed (${e.message})`);
+      if (attempt < HF_MODELS.length) await new Promise((r) => setTimeout(r, 5000));
+    }
+  }
+  throw new Error(`Failed to fetch image from Hugging Face after ${HF_MODELS.length} attempts: ${lastErr}`);
 }
 
 function escapeXml(str) {
@@ -22,7 +74,6 @@ function escapeXml(str) {
     .replace(/'/g, "&apos;");
 }
 
-// Simple word-wrap: breaks text into lines under maxCharsPerLine
 function wrapText(text, maxCharsPerLine) {
   const words = text.split(" ");
   const lines = [];
@@ -70,43 +121,8 @@ function buildTextOverlaySvg({ text, fontSize = 62, isClosing = false }) {
   </svg>`;
 }
 
-// Downloads the Pollinations image with exponential backoff, rotating models on retry.
-// Pollinations' "flux" model in particular has had a documented, ongoing 500-error
-// outage - this is a known issue on their end, not a bug in this code. Rotating to
-// "turbo" (and back) on retries usually gets past it.
-const MODEL_ROTATION = ["flux", "turbo", "flux", "turbo", "turbo"];
-
-async function fetchBackground(prompt, seed) {
-  let lastErr;
-  const maxAttempts = MODEL_ROTATION.length;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const attemptSeed = seed + attempt; // vary seed per retry
-    const model = MODEL_ROTATION[attempt - 1];
-    const url = pollinationsUrl(prompt, attemptSeed, model);
-    try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(90000) });
-      if (!res.ok) throw new Error(`Pollinations HTTP ${res.status} (model=${model})`);
-      const arrayBuf = await res.arrayBuffer();
-      const buf = Buffer.from(arrayBuf);
-      if (buf.length < 1000) throw new Error(`Pollinations returned an empty/invalid image (model=${model})`);
-      return buf;
-    } catch (e) {
-      lastErr = e;
-      const backoffMs = Math.min(2000 * 2 ** (attempt - 1), 30000); // 2s,4s,8s,16s,30s
-      console.log(`  Pollinations attempt ${attempt}/${maxAttempts} failed (${e.message}), retrying in ${backoffMs / 1000}s...`);
-      if (attempt < maxAttempts) await new Promise((r) => setTimeout(r, backoffMs));
-    }
-  }
-  throw new Error(`Failed to fetch Pollinations image after ${maxAttempts} attempts: ${lastErr}`);
-}
-
-/**
- * Generates one finished carousel slide (background + text overlay) as a PNG buffer.
- * @param {{text: string, imagePrompt: string, isClosing?: boolean, seed?: number}} opts
- */
-export async function generateSlideImage({ text, imagePrompt, isClosing = false, seed }) {
-  const finalSeed = seed ?? Math.floor(Math.random() * 1_000_000);
-  const bgBuffer = await fetchBackground(imagePrompt, finalSeed);
+export async function generateSlideImage({ text, imagePrompt, isClosing = false }) {
+  const bgBuffer = await fetchBackground(imagePrompt);
 
   const svgOverlay = Buffer.from(
     buildTextOverlaySvg({ text, fontSize: isClosing ? 48 : 62, isClosing })
