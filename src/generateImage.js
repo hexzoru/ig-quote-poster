@@ -3,12 +3,15 @@ import sharp from "sharp";
 const WIDTH = 1080;
 const HEIGHT = 1350; // Instagram 4:5 portrait, works well for feed + carousel
 
-// Free, no API key: https://pollinations.ai
+// Free: https://pollinations.ai — optional free API key from https://enter.pollinations.ai
+// improves reliability/priority but is not required.
 function pollinationsUrl(prompt, seed) {
   const encoded = encodeURIComponent(
     `${prompt}, minimal, aesthetic, soft lighting, no text, no watermark, no people`
   );
-  return `https://image.pollinations.ai/prompt/${encoded}?width=${WIDTH}&height=${HEIGHT}&nologo=true&seed=${seed}`;
+  const key = process.env.POLLINATIONS_API_KEY;
+  const keyParam = key ? `&key=${encodeURIComponent(key)}` : "";
+  return `https://gen.pollinations.ai/image/${encoded}?width=${WIDTH}&height=${HEIGHT}&nologo=true&seed=${seed}${keyParam}`;
 }
 
 function escapeXml(str) {
@@ -68,22 +71,32 @@ function buildTextOverlaySvg({ text, fontSize = 62, isClosing = false }) {
   </svg>`;
 }
 
-// Downloads the Pollinations image with a couple of retries (it can be briefly slow on cold start)
+// Downloads the Pollinations image with exponential backoff.
+// Pollinations is a free shared service and its image models throw intermittent
+// 500s under load - this is a known, documented issue on their end, not a bug in
+// this code. A new seed is used on each retry since a fresh generation sometimes
+// succeeds where a retried identical one fails.
 async function fetchBackground(prompt, seed) {
-  const url = pollinationsUrl(prompt, seed);
   let lastErr;
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  const maxAttempts = 5;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const attemptSeed = seed + attempt; // vary seed per retry
+    const url = pollinationsUrl(prompt, attemptSeed);
     try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(60000) });
+      const res = await fetch(url, { signal: AbortSignal.timeout(90000) });
       if (!res.ok) throw new Error(`Pollinations HTTP ${res.status}`);
       const arrayBuf = await res.arrayBuffer();
-      return Buffer.from(arrayBuf);
+      const buf = Buffer.from(arrayBuf);
+      if (buf.length < 1000) throw new Error("Pollinations returned an empty/invalid image");
+      return buf;
     } catch (e) {
       lastErr = e;
-      await new Promise((r) => setTimeout(r, 3000 * attempt));
+      const backoffMs = Math.min(2000 * 2 ** (attempt - 1), 30000); // 2s,4s,8s,16s,30s
+      console.log(`  Pollinations attempt ${attempt}/${maxAttempts} failed (${e.message}), retrying in ${backoffMs / 1000}s...`);
+      if (attempt < maxAttempts) await new Promise((r) => setTimeout(r, backoffMs));
     }
   }
-  throw new Error(`Failed to fetch Pollinations image after retries: ${lastErr}`);
+  throw new Error(`Failed to fetch Pollinations image after ${maxAttempts} attempts: ${lastErr}`);
 }
 
 /**
