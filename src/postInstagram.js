@@ -7,8 +7,12 @@
 //   3. Poll GET /{container_id}?fields=status_code until FINISHED
 //   4. POST /{ig-user-id}/media_publish (creation_id=container_id)
 
+// Uses graph.instagram.com because our access token comes from the "Instagram API
+// with Instagram Login" flow (direct login), not the Facebook Login flow. Tokens
+// from Instagram Login only work against this host - using graph.facebook.com with
+// this token type causes "Cannot parse access token" errors.
 const GRAPH_VERSION = "v21.0";
-const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
+const GRAPH_BASE = `https://graph.instagram.com/${GRAPH_VERSION}`;
 
 function requireEnv() {
   const igUserId = process.env.IG_USER_ID;
