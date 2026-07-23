@@ -1,55 +1,60 @@
 import sharp from "sharp";
 
 const WIDTH = 1080;
-const HEIGHT = 1350; // Instagram 4:5 portrait, works well for feed + carousel
+const HEIGHT = 1350;
 
-// Free, no credit card: Google's Gemini API image generation (Gemini 2.5 Flash Image,
-// aka "Nano Banana"). Get a free key at https://aistudio.google.com/apikey
-// This is Google-run infrastructure (not a small community project), which is why
-// it's used here instead of Pollinations (chronically unreliable per their own
-// GitHub issue tracker) or Hugging Face's shifting Inference Providers routing.
-const GEMINI_MODEL = "gemini-2.5-flash-image";
+// Free, no credit card required: Cloudflare Workers AI (10,000 free "neurons"/day,
+// resets daily at 00:00 UTC). Solid production infrastructure run by Cloudflare,
+// unlike Pollinations (chronically unreliable per their own GitHub issues) or
+// Gemini's image model (free quota was set to 0 in Dec 2025, requiring billing).
+const CF_MODEL = "@cf/black-forest-labs/flux-1-schnell";
 
 function buildPrompt(prompt) {
-  return `Generate an image: ${prompt}, minimal, aesthetic, soft lighting, no text, no watermark, no people`;
+  return `${prompt}, minimal, aesthetic, soft lighting, no text, no watermark, no people`;
 }
 
 async function fetchBackground(prompt) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("Missing GEMINI_API_KEY env var (get a free one at https://aistudio.google.com/apikey)");
+  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+  const token = process.env.CLOUDFLARE_API_TOKEN;
+  if (!accountId || !token) {
+    throw new Error("Missing CLOUDFLARE_ACCOUNT_ID or CLOUDFLARE_API_TOKEN env vars (free at https://dash.cloudflare.com)");
+  }
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
+  const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${CF_MODEL}`;
 
   let lastErr;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       const res = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({
-          contents: [{ parts: [{ text: buildPrompt(prompt) }] }],
+          prompt: buildPrompt(prompt),
+          steps: 6,
+          seed: Math.floor(Math.random() * 1_000_000),
         }),
         signal: AbortSignal.timeout(60000),
       });
 
-      if (!res.ok) {
-        const bodyText = await res.text().catch(() => "");
-        throw new Error(`Gemini API HTTP ${res.status}: ${bodyText.slice(0, 300)}`);
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(`Cloudflare AI HTTP ${res.status}: ${JSON.stringify(data.errors || data).slice(0, 300)}`);
       }
 
-      const data = await res.json();
-      const parts = data.candidates?.[0]?.content?.parts || [];
-      const imagePart = parts.find((p) => p.inlineData?.data);
-      if (!imagePart) throw new Error("Gemini response contained no image data");
+      const base64 = data.result?.image;
+      if (!base64) throw new Error("Cloudflare AI response contained no image data");
 
-      return Buffer.from(imagePart.inlineData.data, "base64");
+      return Buffer.from(base64, "base64");
     } catch (e) {
       lastErr = e;
-      console.log(`  Gemini attempt ${attempt}/3 failed (${e.message})`);
+      console.log(`  Cloudflare AI attempt ${attempt}/3 failed (${e.message})`);
       if (attempt < 3) await new Promise((r) => setTimeout(r, 4000 * attempt));
     }
   }
-  throw new Error(`Failed to fetch image from Gemini after 3 attempts: ${lastErr}`);
+  throw new Error(`Failed to fetch image from Cloudflare AI after 3 attempts: ${lastErr}`);
 }
 
 function escapeXml(str) {
